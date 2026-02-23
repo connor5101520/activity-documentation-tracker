@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hash } from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
-import { getDb } from "@/lib/db";
+import { getDb, ensureMigrated } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,12 +21,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    await ensureMigrated();
     const db = getDb();
-    const existing = db
-      .prepare("SELECT id FROM users WHERE email = ?")
-      .get(email);
 
-    if (existing) {
+    const existing = await db.execute({
+      sql: "SELECT id FROM users WHERE email = ?",
+      args: [email],
+    });
+
+    if (existing.rows.length > 0) {
       return NextResponse.json(
         { error: "An account with this email already exists" },
         { status: 409 }
@@ -36,9 +39,10 @@ export async function POST(req: NextRequest) {
     const passwordHash = await hash(password, 12);
     const id = uuidv4();
 
-    db.prepare(
-      "INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)"
-    ).run(id, email, name, passwordHash);
+    await db.execute({
+      sql: "INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)",
+      args: [id, email, name, passwordHash],
+    });
 
     return NextResponse.json({ message: "Account created successfully" });
   } catch {

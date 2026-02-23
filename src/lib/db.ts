@@ -1,27 +1,23 @@
-import Database from "better-sqlite3";
-import path from "path";
+import { createClient, type Client } from "@libsql/client";
 
-const DB_PATH = path.join(process.cwd(), "data", "app.db");
+let client: Client | null = null;
 
-let db: Database.Database | null = null;
-
-export function getDb(): Database.Database {
-  if (!db) {
-    const fs = require("fs");
-    const dir = path.dirname(DB_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    db = new Database(DB_PATH);
-    db.pragma("journal_mode = WAL");
-    db.pragma("foreign_keys = ON");
-    migrate(db);
+export function getDb(): Client {
+  if (!client) {
+    client = createClient({
+      url: process.env.TURSO_DATABASE_URL!,
+      authToken: process.env.TURSO_AUTH_TOKEN,
+    });
   }
-  return db;
+  return client;
 }
 
-function migrate(db: Database.Database) {
-  db.exec(`
+let migrated = false;
+
+export async function ensureMigrated() {
+  if (migrated) return;
+  const db = getDb();
+  await db.executeMultiple(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
@@ -50,4 +46,5 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_activities_user_date ON activities(user_id, date);
     CREATE INDEX IF NOT EXISTS idx_activities_user_id ON activities(user_id);
   `);
+  migrated = true;
 }

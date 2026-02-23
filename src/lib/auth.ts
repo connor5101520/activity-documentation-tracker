@@ -1,7 +1,7 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
-import { getDb } from "./db";
+import { getDb, ensureMigrated } from "./db";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -16,10 +16,14 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
+        await ensureMigrated();
         const db = getDb();
-        const user = db
-          .prepare("SELECT * FROM users WHERE email = ?")
-          .get(credentials.email) as
+        const result = await db.execute({
+          sql: "SELECT * FROM users WHERE email = ?",
+          args: [credentials.email],
+        });
+
+        const user = result.rows[0] as unknown as
           | { id: string; email: string; name: string; password_hash: string }
           | undefined;
 
@@ -27,15 +31,18 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        const isValid = await compare(credentials.password, user.password_hash);
+        const isValid = await compare(
+          credentials.password,
+          user.password_hash as string
+        );
         if (!isValid) {
           return null;
         }
 
         return {
-          id: user.id,
-          email: user.email,
-          name: user.name,
+          id: user.id as string,
+          email: user.email as string,
+          name: user.name as string,
         };
       },
     }),

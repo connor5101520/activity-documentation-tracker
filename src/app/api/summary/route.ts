@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { getDb, ensureMigrated } from "@/lib/db";
 
 interface Activity {
   id: string;
@@ -53,7 +53,6 @@ function generateWeeklySummary(
   body += `Completed: ${completedActivities}\n`;
   body += `In progress: ${totalActivities - completedActivities}\n\n`;
 
-  // By category
   body += `BY CATEGORY\n`;
   body += `${"-".repeat(30)}\n`;
   for (const [category, items] of Object.entries(byCategory)) {
@@ -62,7 +61,6 @@ function generateWeeklySummary(
   }
   body += `\n`;
 
-  // Daily breakdown
   body += `DAILY BREAKDOWN\n`;
   body += `${"-".repeat(30)}\n`;
   const sortedDates = Object.keys(byDate).sort();
@@ -80,7 +78,6 @@ function generateWeeklySummary(
     }
   }
 
-  // Key accomplishments
   const accomplishments = activities.filter((a) => a.completed);
   if (accomplishments.length > 0) {
     body += `\nKEY ACCOMPLISHMENTS\n`;
@@ -90,7 +87,6 @@ function generateWeeklySummary(
     }
   }
 
-  // Still in progress
   const inProgress = activities.filter((a) => !a.completed);
   if (inProgress.length > 0) {
     body += `\nSTILL IN PROGRESS\n`;
@@ -115,7 +111,6 @@ export async function GET(req: NextRequest) {
   let startDate = searchParams.get("startDate");
   let endDate = searchParams.get("endDate");
 
-  // Default to current week (Monday to Sunday)
   if (!startDate || !endDate) {
     const now = new Date();
     const dayOfWeek = now.getDay();
@@ -128,16 +123,20 @@ export async function GET(req: NextRequest) {
     endDate = sunday.toISOString().split("T")[0];
   }
 
+  await ensureMigrated();
   const db = getDb();
-  const activities = db
-    .prepare(
-      "SELECT * FROM activities WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC, created_at ASC"
-    )
-    .all(session.user.id, startDate, endDate) as Activity[];
 
-  const user = db
-    .prepare("SELECT name FROM users WHERE id = ?")
-    .get(session.user.id) as { name: string };
+  const activitiesResult = await db.execute({
+    sql: "SELECT * FROM activities WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC, created_at ASC",
+    args: [session.user.id, startDate, endDate],
+  });
+  const activities = activitiesResult.rows as unknown as Activity[];
+
+  const userResult = await db.execute({
+    sql: "SELECT name FROM users WHERE id = ?",
+    args: [session.user.id],
+  });
+  const user = userResult.rows[0] as unknown as { name: string };
 
   const summary = generateWeeklySummary(
     activities,

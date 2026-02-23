@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { getDb, ensureMigrated } from "@/lib/db";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -9,18 +9,15 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  await ensureMigrated();
   const db = getDb();
-  const user = db
-    .prepare(
-      "SELECT notification_time, notification_enabled, weekly_summary_day, weekly_summary_time FROM users WHERE id = ?"
-    )
-    .get(session.user.id) as {
-    notification_time: string;
-    notification_enabled: number;
-    weekly_summary_day: number;
-    weekly_summary_time: string;
-  } | undefined;
 
+  const result = await db.execute({
+    sql: "SELECT notification_time, notification_enabled, weekly_summary_day, weekly_summary_time FROM users WHERE id = ?",
+    args: [session.user.id],
+  });
+
+  const user = result.rows[0];
   if (!user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
@@ -47,25 +44,28 @@ export async function PUT(req: NextRequest) {
       weeklySummaryTime,
     } = await req.json();
 
+    await ensureMigrated();
     const db = getDb();
-    db.prepare(
-      `UPDATE users
-       SET notification_time = COALESCE(?, notification_time),
-           notification_enabled = COALESCE(?, notification_enabled),
-           weekly_summary_day = COALESCE(?, weekly_summary_day),
-           weekly_summary_time = COALESCE(?, weekly_summary_time)
-       WHERE id = ?`
-    ).run(
-      notificationTime ?? null,
-      notificationEnabled !== undefined
-        ? notificationEnabled
-          ? 1
-          : 0
-        : null,
-      weeklySummaryDay ?? null,
-      weeklySummaryTime ?? null,
-      session.user.id
-    );
+
+    await db.execute({
+      sql: `UPDATE users
+            SET notification_time = COALESCE(?, notification_time),
+                notification_enabled = COALESCE(?, notification_enabled),
+                weekly_summary_day = COALESCE(?, weekly_summary_day),
+                weekly_summary_time = COALESCE(?, weekly_summary_time)
+            WHERE id = ?`,
+      args: [
+        notificationTime ?? null,
+        notificationEnabled !== undefined
+          ? notificationEnabled
+            ? 1
+            : 0
+          : null,
+        weeklySummaryDay ?? null,
+        weeklySummaryTime ?? null,
+        session.user.id,
+      ],
+    });
 
     return NextResponse.json({ message: "Settings updated" });
   } catch {

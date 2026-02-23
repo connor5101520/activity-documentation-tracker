@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { getDb, ensureMigrated } from "@/lib/db";
 
 export async function PUT(
   req: NextRequest,
@@ -16,39 +16,44 @@ export async function PUT(
     const { id } = await params;
     const { title, description, category, completed } = await req.json();
 
+    await ensureMigrated();
     const db = getDb();
-    const existing = db
-      .prepare("SELECT * FROM activities WHERE id = ? AND user_id = ?")
-      .get(id, session.user.id) as { id: string } | undefined;
 
-    if (!existing) {
+    const existing = await db.execute({
+      sql: "SELECT * FROM activities WHERE id = ? AND user_id = ?",
+      args: [id, session.user.id],
+    });
+
+    if (existing.rows.length === 0) {
       return NextResponse.json(
         { error: "Activity not found" },
         { status: 404 }
       );
     }
 
-    db.prepare(
-      `UPDATE activities
-       SET title = COALESCE(?, title),
-           description = COALESCE(?, description),
-           category = COALESCE(?, category),
-           completed = COALESCE(?, completed),
-           updated_at = datetime('now')
-       WHERE id = ? AND user_id = ?`
-    ).run(
-      title ?? null,
-      description ?? null,
-      category ?? null,
-      completed !== undefined ? (completed ? 1 : 0) : null,
-      id,
-      session.user.id
-    );
+    await db.execute({
+      sql: `UPDATE activities
+            SET title = COALESCE(?, title),
+                description = COALESCE(?, description),
+                category = COALESCE(?, category),
+                completed = COALESCE(?, completed),
+                updated_at = datetime('now')
+            WHERE id = ? AND user_id = ?`,
+      args: [
+        title ?? null,
+        description ?? null,
+        category ?? null,
+        completed !== undefined ? (completed ? 1 : 0) : null,
+        id,
+        session.user.id,
+      ],
+    });
 
-    const updated = db
-      .prepare("SELECT * FROM activities WHERE id = ?")
-      .get(id);
-    return NextResponse.json(updated);
+    const result = await db.execute({
+      sql: "SELECT * FROM activities WHERE id = ?",
+      args: [id],
+    });
+    return NextResponse.json(result.rows[0]);
   } catch {
     return NextResponse.json(
       { error: "Something went wrong" },
@@ -67,12 +72,15 @@ export async function DELETE(
   }
 
   const { id } = await params;
+  await ensureMigrated();
   const db = getDb();
-  const result = db
-    .prepare("DELETE FROM activities WHERE id = ? AND user_id = ?")
-    .run(id, session.user.id);
 
-  if (result.changes === 0) {
+  const result = await db.execute({
+    sql: "DELETE FROM activities WHERE id = ? AND user_id = ?",
+    args: [id, session.user.id],
+  });
+
+  if (result.rowsAffected === 0) {
     return NextResponse.json(
       { error: "Activity not found" },
       { status: 404 }
